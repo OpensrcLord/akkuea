@@ -5,7 +5,9 @@ import {
   uuidParamSchema,
   paginationQuerySchema,
   rateLimit,
+  walletKeyGenerator,
   authPlugin,
+  idempotency,
 } from '../middleware';
 import { LendingController } from '../controllers/LendingController';
 import { positionService } from '../services/PositionService';
@@ -20,8 +22,10 @@ const poolIdParamSchema = uuidParamSchema;
 
 const stellarAddressSchema = z
   .string()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .refine((value: any) => positionService.validateAddress(value), 'Invalid Stellar address format');
+  .refine(
+    (value: string) => positionService.validateAddress(value),
+    'Invalid Stellar address format',
+  );
 
 const poolUserParamsSchema = z.object({
   id: z.string().uuid('Invalid UUID format'),
@@ -79,26 +83,56 @@ export const lendingRoutes = new Elysia({ prefix: '/lending' })
   // PUBLIC ROUTES
   // GET /pools - List pools with pagination and filters
   .use(validate({ query: poolQuerySchema }))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .get('/pools', async (ctx: any) => LendingController.getPools(ctx))
+  .get('/pools', async (ctx) => LendingController.getPools(ctx), {
+    detail: {
+      summary: 'List lending pools',
+      description: 'Retrieve lending pools with pagination and optional filters',
+      tags: ['Lending'],
+    },
+  })
 
   // GET /pools/:id - Get single pool
   .use(validate({ params: poolIdParamSchema }))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .get('/pools/:id', async (ctx: any) => LendingController.getPool(ctx))
+  .get('/pools/:id', async (ctx) => LendingController.getPool(ctx), {
+    detail: {
+      summary: 'Get lending pool',
+      description: 'Retrieve a single lending pool by its UUID',
+      tags: ['Lending'],
+    },
+  })
 
   // GET /pools/:id/user/:address/deposits - Get user deposits
   .use(validate({ params: poolUserParamsSchema }))
-  .get('/pools/:id/user/:address/deposits', async (ctx) => LendingController.getUserDeposits(ctx))
+  .get('/pools/:id/user/:address/deposits', async (ctx) => LendingController.getUserDeposits(ctx), {
+    detail: {
+      summary: 'Get user deposits',
+      description: 'Retrieve all deposits for a user in a specific lending pool',
+      tags: ['Lending'],
+    },
+  })
 
   // GET /pools/:id/user/:address/borrows - Get user borrows
   .use(validate({ params: poolUserParamsSchema }))
-  .get('/pools/:id/user/:address/borrows', async (ctx) => LendingController.getUserBorrows(ctx))
+  .get('/pools/:id/user/:address/borrows', async (ctx) => LendingController.getUserBorrows(ctx), {
+    detail: {
+      summary: 'Get user borrows',
+      description: 'Retrieve all borrows for a user in a specific lending pool',
+      tags: ['Lending'],
+    },
+  })
 
   // GET /pools/:id/user/:address/summary - Get user position summary
   .use(validate({ params: poolUserParamsSchema }))
-  .get('/pools/:id/user/:address/summary', async (ctx) =>
-    LendingController.getUserPositionSummary(ctx),
+  .get(
+    '/pools/:id/user/:address/summary',
+    async (ctx) => LendingController.getUserPositionSummary(ctx),
+    {
+      detail: {
+        summary: 'Get user position summary',
+        description: 'Retrieve a summary of a user position in a specific lending pool',
+        tags: ['Lending'],
+      },
+    },
   )
 
   // PROTECTED ROUTES
@@ -106,39 +140,74 @@ export const lendingRoutes = new Elysia({ prefix: '/lending' })
 
   // POST /pools - Create pool (auth required)
   .use(validate({ body: createPoolSchema }))
-  .post('/pools', async (ctx) => LendingController.createPool(ctx), { beforeHandle: [rateLimit()] })
+  .post('/pools', async (ctx) => LendingController.createPool(ctx), {
+    beforeHandle: [rateLimit({ keyGenerator: walletKeyGenerator })],
+    detail: {
+      summary: 'Create a lending pool',
+      description: 'Create a new lending pool (requires authentication)',
+      tags: ['Lending'],
+    },
+  })
 
   // POST /pools/:id/deposit - Deposit into pool (auth required)
   .use(validate({ body: depositSchema }))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .post('/pools/:id/deposit', async (ctx: any) => LendingController.deposit(ctx), {
+  .post('/pools/:id/deposit', async (ctx) => LendingController.deposit(ctx), {
     beforeHandle: [rateLimit()],
+    detail: {
+      summary: 'Deposit into pool',
+      description: 'Deposit assets into a lending pool (requires authentication)',
+      tags: ['Lending'],
+    },
   })
 
   // POST /pools/:id/withdraw - Withdraw from pool (auth required)
   .use(validate({ body: withdrawSchema }))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .post('/pools/:id/withdraw', async (ctx: any) => LendingController.withdraw(ctx), {
+  .post('/pools/:id/withdraw', async (ctx) => LendingController.withdraw(ctx), {
     beforeHandle: [rateLimit()],
+    detail: {
+      summary: 'Withdraw from pool',
+      description: 'Withdraw assets from a lending pool (requires authentication)',
+      tags: ['Lending'],
+    },
   })
 
   // POST /pools/:id/borrow - Borrow from pool (auth required)
+  .use(idempotency)
   .use(validate({ body: borrowSchema }))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .post('/pools/:id/borrow', async (ctx: any) => LendingController.borrow(ctx), {
+  .post('/pools/:id/borrow', async (ctx) => LendingController.borrow(ctx), {
     beforeHandle: [rateLimit()],
+    detail: {
+      summary: 'Borrow from pool',
+      description:
+        'Borrow assets from a lending pool by providing collateral (requires authentication)',
+      tags: ['Lending'],
+    },
   })
 
   // POST /pools/:id/repay - Repay loan (auth required)
+  .use(idempotency)
   .use(validate({ body: repaySchema }))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  .post('/pools/:id/repay', async (ctx: any) => LendingController.repay(ctx), {
+  .post('/pools/:id/repay', async (ctx) => LendingController.repay(ctx), {
     beforeHandle: [rateLimit()],
+    detail: {
+      summary: 'Repay loan',
+      description: 'Repay a borrowed loan in a lending pool (requires authentication)',
+      tags: ['Lending'],
+    },
   })
 
   // POST /pools/:id/positions/:borrowerId/liquidate - Execute liquidation (liquidator role required)
   .use(liquidatorAuth)
   .use(validate({ params: liquidationParamsSchema }))
-  .post('/pools/:id/positions/:borrowerId/liquidate', async (ctx) =>
-    LendingController.liquidate(ctx as Parameters<typeof LendingController.liquidate>[0]),
+  .post(
+    '/pools/:id/positions/:borrowerId/liquidate',
+    async (ctx) => LendingController.liquidate(ctx),
+    {
+      detail: {
+        summary: 'Liquidate position',
+        description:
+          'Execute liquidation on an undercollateralized position (requires liquidator role)',
+        tags: ['Lending'],
+      },
+    },
   );

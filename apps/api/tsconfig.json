@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "lib": ["ESNext"],
     "target": "ESNext",
@@ -7,6 +8,7 @@
     "jsx": "react-jsx",
     "allowJs": true,
     "moduleResolution": "bundler",
+    "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
@@ -19,8 +21,9 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
     "baseUrl": ".",
+    "ignoreDeprecations": "5.0",
     "paths": {
-      "@real-estate-defi/shared": ["../shared/src"]
+      "@akkuea/shared": ["../shared/src"]
     }
   }
 }

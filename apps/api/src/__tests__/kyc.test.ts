@@ -2,14 +2,18 @@ import { describe, expect, it, beforeAll } from 'bun:test';
 import { Elysia } from 'elysia';
 import { kycRoutes } from '../routes/kyc';
 import { errorHandler } from '../middleware/errorHandler';
-import { VALID_UUID, NON_EXISTENT_UUID } from '@real-estate-defi/shared';
+import { VALID_UUID } from '@akkuea/shared';
 import { userRepository } from '../repositories/UserRepository';
+import jwt from 'jsonwebtoken';
 
 const skipIfNoDatabase = !process.env.DATABASE_URL;
 // Use a unique dummy address for KYC tests to avoid parallel test collisions with webhooks
 const TEST_WALLET = 'GAKYCTESTWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
-const NON_EXISTENT_USER_ID = NON_EXISTENT_UUID;
+const NON_EXISTENT_USER_ID = crypto.randomUUID();
 const NON_EXISTENT_DOC_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-default-key-for-dev';
+const INTERNAL_KEY = process.env.INTERNAL_API_KEY || 'test-internal-api-key';
+process.env.INTERNAL_API_KEY = INTERNAL_KEY;
 
 function createApp() {
   return new Elysia().use(errorHandler).use(kycRoutes);
@@ -17,18 +21,33 @@ function createApp() {
 
 describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
   let testUserId = VALID_UUID;
+  let testToken = '';
+
+  /**
+   * The upload route is rate-limited per wallet and every router in the process
+   * shares one limiter, so each upload test signs in as its own wallet. That
+   * keeps one test's requests from spending another test's budget (the
+   * rate-limit test below needs a wallet of its own).
+   */
+  function uploadToken(): string {
+    const wallet = `G${crypto.randomUUID().replace(/-/g, '').toUpperCase().padEnd(55, '0')}`;
+    return jwt.sign({ id: testUserId, walletAddress: wallet }, JWT_SECRET);
+  }
 
   beforeAll(async () => {
     if (!skipIfNoDatabase) {
       const user = await userRepository.getOrCreateByWallet(TEST_WALLET);
       testUserId = user.id;
+      testToken = jwt.sign({ id: testUserId, walletAddress: TEST_WALLET }, JWT_SECRET);
     }
   });
   describe('GET /kyc/status/:userId', () => {
-    it.skipIf(skipIfNoDatabase)('returns 404 for non-existent user', async () => {
+    it.skipIf(skipIfNoDatabase)('returns 404 for non-existent user (authorized)', async () => {
       const app = createApp();
       const response = await app.handle(
-        new Request(`http://localhost/kyc/status/${NON_EXISTENT_USER_ID}`),
+        new Request(`http://localhost/kyc/status/${NON_EXISTENT_USER_ID}`, {
+          headers: { Authorization: `Bearer ${testToken}` },
+        }),
       );
       expect(response.status).toBe(404);
       const body = (await response.json()) as {
@@ -40,9 +59,33 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       expect(body.message).toContain('User not found');
     });
 
-    it.skipIf(skipIfNoDatabase)('returns status and documents for existing user', async () => {
+    it.skipIf(skipIfNoDatabase)('returns 401 when no token is provided', async () => {
       const app = createApp();
       const response = await app.handle(new Request(`http://localhost/kyc/status/${testUserId}`));
+      expect(response.status).toBe(401);
+    });
+
+    it.skipIf(skipIfNoDatabase)('returns 403 for a valid token for a different user', async () => {
+      const app = createApp();
+      const otherToken = jwt.sign(
+        { id: NON_EXISTENT_USER_ID, walletAddress: 'GOTHER' },
+        JWT_SECRET,
+      );
+      const response = await app.handle(
+        new Request(`http://localhost/kyc/status/${testUserId}`, {
+          headers: { Authorization: `Bearer ${otherToken}` },
+        }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it.skipIf(skipIfNoDatabase)('returns status and documents for existing user', async () => {
+      const app = createApp();
+      const response = await app.handle(
+        new Request(`http://localhost/kyc/status/${testUserId}`, {
+          headers: { Authorization: `Bearer ${testToken}` },
+        }),
+      );
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
         status: string;
@@ -59,7 +102,10 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request('http://localhost/kyc/upload', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-test-bypass-ratelimit': 'true' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${uploadToken()}`,
+          },
           body: JSON.stringify({}),
         }),
       );
@@ -76,7 +122,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request('http://localhost/kyc/upload', {
           method: 'POST',
-          headers: { 'x-test-bypass-ratelimit': 'true' },
+          headers: { Authorization: `Bearer ${uploadToken()}` },
           body: formData,
         }),
       );
@@ -94,7 +140,55 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request('http://localhost/kyc/upload', {
           method: 'POST',
-          headers: { 'x-test-bypass-ratelimit': 'true' },
+          headers: { Authorization: `Bearer ${uploadToken()}` },
+          body: formData,
+        }),
+      );
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { message?: string };
+      expect(body.message?.toLowerCase()).toMatch(/invalid file type|only pdf|jpg|png/);
+    });
+
+    it('returns 400 for a renamed EXE with a .pdf extension (magic-byte check)', async () => {
+      // The file has a valid .pdf extension and MIME type but EXE magic bytes.
+      // Without magic-byte validation this would have slipped through.
+      const app = createApp();
+      const formData = new FormData();
+      formData.set('userId', testUserId);
+      formData.set('documentType', 'passport');
+      // MZ header - Windows PE executable
+      const exeMagic = new Uint8Array([
+        0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00,
+        0x00,
+      ]);
+      formData.set('file', new File([exeMagic], 'passport.pdf', { type: 'application/pdf' }));
+      const response = await app.handle(
+        new Request('http://localhost/kyc/upload', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${uploadToken()}` },
+          body: formData,
+        }),
+      );
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { message?: string };
+      expect(body.message?.toLowerCase()).toMatch(/invalid file type|only pdf|jpg|png/);
+    });
+
+    it('returns 400 for a renamed ZIP with a .jpg extension (magic-byte check)', async () => {
+      const app = createApp();
+      const formData = new FormData();
+      formData.set('userId', testUserId);
+      formData.set('documentType', 'passport');
+      // PK header - ZIP archive
+      const zipMagic = new Uint8Array([
+        0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00,
+      ]);
+      formData.set('file', new File([zipMagic], 'photo.jpg', { type: 'image/jpeg' }));
+      const response = await app.handle(
+        new Request('http://localhost/kyc/upload', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${uploadToken()}` },
           body: formData,
         }),
       );
@@ -114,7 +208,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request('http://localhost/kyc/upload', {
           method: 'POST',
-          headers: { 'x-test-bypass-ratelimit': 'true' },
+          headers: { Authorization: `Bearer ${uploadToken()}` },
           body: formData,
         }),
       );
@@ -133,7 +227,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request('http://localhost/kyc/upload', {
           method: 'POST',
-          headers: { 'x-test-bypass-ratelimit': 'true' },
+          headers: { Authorization: `Bearer ${uploadToken()}` },
           body: formData,
         }),
       );
@@ -145,15 +239,46 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
   });
 
   describe('GET /kyc/documents/:userId', () => {
-    it.skipIf(skipIfNoDatabase)('returns 404 for non-existent user', async () => {
+    it.skipIf(skipIfNoDatabase)('returns 401 when no token is provided', async () => {
       const app = createApp();
       const response = await app.handle(
-        new Request(`http://localhost/kyc/documents/${NON_EXISTENT_USER_ID}`),
+        new Request(`http://localhost/kyc/documents/${testUserId}`),
       );
-      expect(response.status).toBe(404);
-      const body = (await response.json()) as { error?: string };
-      expect(body.error).toBe('NOT_FOUND');
+      expect(response.status).toBe(401);
     });
+
+    it.skipIf(skipIfNoDatabase)('returns 403 for a valid token for a different user', async () => {
+      const app = createApp();
+      const otherToken = jwt.sign(
+        { id: NON_EXISTENT_USER_ID, walletAddress: 'GOTHER' },
+        JWT_SECRET,
+      );
+      const response = await app.handle(
+        new Request(`http://localhost/kyc/documents/${testUserId}`, {
+          headers: { Authorization: `Bearer ${otherToken}` },
+        }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it.skipIf(skipIfNoDatabase)(
+      'returns 404 for non-existent user when the token matches the requested userId',
+      async () => {
+        const app = createApp();
+        const matchingToken = jwt.sign(
+          { id: NON_EXISTENT_USER_ID, walletAddress: 'GOTHER' },
+          JWT_SECRET,
+        );
+        const response = await app.handle(
+          new Request(`http://localhost/kyc/documents/${NON_EXISTENT_USER_ID}`, {
+            headers: { Authorization: `Bearer ${matchingToken}` },
+          }),
+        );
+        expect(response.status).toBe(404);
+        const body = (await response.json()) as { error?: string };
+        expect(body.error).toBe('NOT_FOUND');
+      },
+    );
   });
 
   describe('POST /kyc/verify/:documentId', () => {
@@ -162,7 +287,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request(`http://localhost/kyc/verify/${NON_EXISTENT_DOC_ID}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'internal-api-key': INTERNAL_KEY },
           body: JSON.stringify({ verified: true }),
         }),
       );
@@ -184,6 +309,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const uploadRes = await app.handle(
         new Request('http://localhost/kyc/upload', {
           method: 'POST',
+          headers: { Authorization: `Bearer ${uploadToken()}` },
           body: formData,
         }),
       );
@@ -198,7 +324,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request(`http://localhost/kyc/verify/${documentId}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'internal-api-key': INTERNAL_KEY },
           body: JSON.stringify({ verified: true }),
         }),
       );
@@ -223,6 +349,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const uploadRes = await app.handle(
         new Request('http://localhost/kyc/upload', {
           method: 'POST',
+          headers: { Authorization: `Bearer ${uploadToken()}` },
           body: formData,
         }),
       );
@@ -234,7 +361,7 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       const response = await app.handle(
         new Request(`http://localhost/kyc/verify/${documentId}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'internal-api-key': INTERNAL_KEY },
           body: JSON.stringify({ verified: false, notes: 'Document expired' }),
         }),
       );
@@ -248,7 +375,9 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
     it.skipIf(skipIfNoDatabase)('returns 404 for non-existent document', async () => {
       const app = createApp();
       const response = await app.handle(
-        new Request(`http://localhost/kyc/file/${NON_EXISTENT_DOC_ID}`),
+        new Request(`http://localhost/kyc/file/${NON_EXISTENT_DOC_ID}`, {
+          headers: { Authorization: `Bearer ${testToken}` },
+        }),
       );
       expect(response.status).toBe(404);
     });
@@ -265,7 +394,11 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       let lastStatus = 0;
       for (let i = 0; i < 15; i++) {
         const response = await app.handle(
-          new Request('http://localhost/kyc/upload', { method: 'POST', body: formData }),
+          new Request('http://localhost/kyc/upload', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${testToken}` },
+            body: formData,
+          }),
         );
         lastStatus = response.status;
         if (response.status === 429) break;
@@ -273,4 +406,80 @@ describe.skipIf(skipIfNoDatabase)('KYC Routes', () => {
       expect(lastStatus).toBe(429);
     });
   });
+});
+
+describe('KYC Verify Endpoint Auth Rules (Unit Tests)', () => {
+  it('returns 401 when called with no authentication headers at all', async () => {
+    const app = createApp();
+    const response = await app.handle(
+      new Request(`http://localhost/kyc/verify/${NON_EXISTENT_DOC_ID}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verified: true }),
+      }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it('returns 401 when called with an invalid internal API key', async () => {
+    const app = createApp();
+    const response = await app.handle(
+      new Request(`http://localhost/kyc/verify/${NON_EXISTENT_DOC_ID}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'internal-api-key': 'invalid-key' },
+        body: JSON.stringify({ verified: true }),
+      }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it('returns 401 when called with a user JWT', async () => {
+    const app = createApp();
+    const token = jwt.sign({ id: NON_EXISTENT_USER_ID, walletAddress: TEST_WALLET }, JWT_SECRET);
+    const response = await app.handle(
+      new Request(`http://localhost/kyc/verify/${NON_EXISTENT_DOC_ID}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ verified: true }),
+      }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it.skipIf(skipIfNoDatabase)('accepts internal API key', async () => {
+    const app = createApp();
+    const response = await app.handle(
+      new Request(`http://localhost/kyc/verify/${NON_EXISTENT_DOC_ID}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'internal-api-key': INTERNAL_KEY },
+        body: JSON.stringify({ verified: true }),
+      }),
+    );
+    // With a missing document this should still reach auth then return 404
+    expect([200, 404]).toContain(response.status);
+  });
+
+  it.skipIf(skipIfNoDatabase)(
+    'accepts OPERATIONS_BACKEND_CREDENTIAL via x-internal-api-key',
+    async () => {
+      const origCred = process.env.OPERATIONS_BACKEND_CREDENTIAL;
+      process.env.OPERATIONS_BACKEND_CREDENTIAL = 'test-ops-credential-123';
+      try {
+        const app = createApp();
+        const response = await app.handle(
+          new Request(`http://localhost/kyc/verify/${NON_EXISTENT_DOC_ID}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-internal-api-key': 'test-ops-credential-123',
+            },
+            body: JSON.stringify({ verified: true }),
+          }),
+        );
+        expect([200, 404]).toContain(response.status);
+      } finally {
+        process.env.OPERATIONS_BACKEND_CREDENTIAL = origCred;
+      }
+    },
+  );
 });
