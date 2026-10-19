@@ -18,6 +18,7 @@ export const users = pgTable('users', {
   displayName: varchar('display_name', { length: 50 }),
   kycStatus: kycStatusEnum('kyc_status').notNull().default('not_started'),
   kycTier: kycTierEnum('kyc_tier').notNull().default('none'),
+  kycExpiresAt: timestamp('kyc_expires_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
@@ -52,13 +53,11 @@ export const kycDocuments = pgTable('kyc_documents', {
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const usersRelations = relations(users, ({ many }: any) => ({
+export const usersRelations = relations(users, ({ many }) => ({
   kycDocuments: many(kycDocuments),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const kycDocumentsRelations = relations(kycDocuments, ({ one }: any) => ({
+export const kycDocumentsRelations = relations(kycDocuments, ({ one }) => ({
   user: one(users, {
     fields: [kycDocuments.userId],
     references: [users.id],
