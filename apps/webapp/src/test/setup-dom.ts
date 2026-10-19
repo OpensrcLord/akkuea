@@ -8,6 +8,7 @@ Object.defineProperty(globalThis, "window", {
   value: dom.window,
   writable: true,
 });
+globalThis.window.fetch = fetch;
 
 Object.defineProperty(globalThis, "document", {
   value: dom.window.document,
@@ -26,6 +27,21 @@ Object.defineProperty(globalThis, "localStorage", {
 
 Object.defineProperty(globalThis, "HTMLElement", {
   value: dom.window.HTMLElement,
+  writable: true,
+});
+
+Object.defineProperty(globalThis, "SVGElement", {
+  value: dom.window.SVGElement,
+  writable: true,
+});
+
+Object.defineProperty(globalThis, "Element", {
+  value: dom.window.Element,
+  writable: true,
+});
+
+Object.defineProperty(globalThis, "Node", {
+  value: dom.window.Node,
   writable: true,
 });
 
