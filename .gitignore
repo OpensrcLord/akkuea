@@ -98,3 +98,13 @@ Thumbs.db
 
 # Bun specific
 bun.lockb
+
+# Snapshot files (generated test artifacts)
+*.snap
+
+# Uploaded files
+apps/api/uploads/
+
+
+plan.md
+tasks/

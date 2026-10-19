@@ -9,17 +9,14 @@ import {
   type PropertyDocument,
   type NewPropertyDocument,
 } from '../db/schema';
+import type { DbTransaction } from '../db/types';
 import { BaseRepository } from './BaseRepository';
 
 /**
  * Filter options for querying properties
  */
 export type PropertyReviewStatus =
-  | 'pending_review'
-  | 'approved'
-  | 'rejected'
-  | 'changes_requested'
-  | 'on_hold';
+  'pending_review' | 'approved' | 'rejected' | 'changes_requested' | 'on_hold';
 
 export interface PropertyFilter {
   ownerId?: string;
@@ -215,8 +212,7 @@ export class PropertyRepository extends BaseRepository<typeof properties, Proper
     id: string,
     data: { tokenAddress: string; sorobanPropertyId: number },
   ): Promise<Property | undefined> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return db.transaction(async (tx: any) => {
+    return db.transaction(async (tx: DbTransaction) => {
       const [property] = await tx.select().from(properties).where(eq(properties.id, id)).limit(1);
 
       if (!property) {

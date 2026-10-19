@@ -5,14 +5,14 @@ import type {
   BorrowPosition,
   DepositPosition,
   LendingPool,
-} from "@real-estate-defi/shared";
+} from "@akkuea/shared";
 import {
   VALID_STELLAR_ADDRESS,
   VALID_UUID,
   createLendingPool,
   createDepositPosition,
   createBorrowPosition,
-} from "@real-estate-defi/shared";
+} from "@akkuea/shared";
 
 describe("Lending API", () => {
   beforeEach(() => {
@@ -89,7 +89,7 @@ describe("Lending API", () => {
 
       expect(result).toEqual(mockPool);
       expect(calls[0].url).toBe(
-        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440001",
+        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440000",
       );
       expect(calls[0].options.method).toBe("GET");
     });
@@ -114,7 +114,7 @@ describe("Lending API", () => {
 
       expect(result).toEqual(mockResponse);
       expect(calls[0].url).toBe(
-        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440001/deposit",
+        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440000/deposit",
       );
       expect(calls[0].options.method).toBe("POST");
       expect(JSON.parse(calls[0].options.body as string)).toEqual({
@@ -151,7 +151,7 @@ describe("Lending API", () => {
 
       expect(result).toEqual(mockResponse);
       expect(calls[0].url).toBe(
-        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440001/borrow",
+        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440000/borrow",
       );
       expect(calls[0].options.method).toBe("POST");
       expect(JSON.parse(calls[0].options.body as string)).toEqual({
@@ -186,7 +186,7 @@ describe("Lending API", () => {
 
       expect(result).toEqual(mockResponse);
       expect(calls[0].url).toBe(
-        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440001/withdraw",
+        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440000/withdraw",
       );
       expect(JSON.parse(calls[0].options.body as string)).toEqual({
         amount: "500",
@@ -219,7 +219,7 @@ describe("Lending API", () => {
 
       expect(result).toEqual(mockResponse);
       expect(calls[0].url).toBe(
-        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440001/repay",
+        "http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440000/repay",
       );
       expect(JSON.parse(calls[0].options.body as string)).toEqual({
         amount: "500",
@@ -254,7 +254,7 @@ describe("Lending API", () => {
 
       expect(result).toEqual(mockDeposits);
       expect(calls[0].url).toBe(
-        `http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440001/user/${VALID_STELLAR_ADDRESS}/deposits`,
+        `http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440000/user/${VALID_STELLAR_ADDRESS}/deposits`,
       );
       expect(calls[0].options.method).toBe("GET");
     });
@@ -284,7 +284,7 @@ describe("Lending API", () => {
 
       expect(result).toEqual(mockBorrows);
       expect(calls[0].url).toBe(
-        `http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440001/user/${VALID_STELLAR_ADDRESS}/borrows`,
+        `http://localhost:3001/lending/pools/550e8400-e29b-41d4-a716-446655440000/user/${VALID_STELLAR_ADDRESS}/borrows`,
       );
       expect(calls[0].options.method).toBe("GET");
     });
